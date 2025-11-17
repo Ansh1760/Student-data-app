@@ -1,87 +1,89 @@
+// index.js
 require('dotenv').config();
 
 const express = require('express');
-const app = express();
 const path = require('path');
-const mongoose = require('mongoose');
-const session = require('express-session'); // added
-const userModel = require('./models/user'); // your Mongoose model
+const session = require('express-session');
+const MongoStore = require('connect-mongo');
+const connectDB = require('./lib/db');  // using cached DB connector
+const userModel = require('./models/user');
 
+const app = express();
 app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ✅ MongoDB connection (update with your URI)
-mongoose.connect('mongodb://127.0.0.1:27017/studentDB')
-  .then(() => console.log('✅ MongoDB Connected'))
-  .catch(err => console.error(err));
+// -----------------------------------------------
+// ✅ CONNECT TO MONGO USING lib/db.js (Atlas / Local)
+// -----------------------------------------------
+connectDB()
+  .then(() => console.log("✅ MongoDB Connected using connectDB"))
+  .catch(err => console.error("❌ Mongo Error:", err));
 
-// -------------------- SESSION SETUP --------------------
+
+// -----------------------------------------------
+// ✅ SESSION STORE (PERSISTENT ON RENDER)
+// -----------------------------------------------
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'dev_secret_replace_in_prod',
+  secret: process.env.SESSION_SECRET || 'dev_secret_123',
   resave: false,
   saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 2 } // 2 hours
+  store: MongoStore.create({
+    mongoUrl: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/studentDB'
+  }),
+  cookie: {
+    maxAge: 1000 * 60 * 60 * 24 // 1 day
+  }
 }));
 
-// expose user to views (optional)
+// Make user available in templates
 app.use((req, res, next) => {
-  res.locals.currentUser = req.session && req.session.user ? req.session.user : null;
+  res.locals.currentUser = req.session?.user || null;
   next();
 });
 
-// Simple local user (no DB) - change as needed
-const LOCAL_USER = { username: 'admin', password: '12345' };
+// -----------------------------------------------
+// SIMPLE STATIC LOGIN USER
+// -----------------------------------------------
+const LOCAL_USER = { username: "admin", password: "12345" };
 
-// Middleware to protect routes
+// Protect routes middleware
 function ensureAuth(req, res, next) {
-  if (req.session && req.session.user) return next();
-  // if AJAX request, send 401; else redirect to login
-  if (req.xhr || req.headers.accept.indexOf('json') > -1) return res.status(401).json({ error: 'Unauthorized' });
-  res.redirect('/login');
+  if (req.session.user) return next();
+  return res.redirect('/login');
 }
 
-// -------------------- AUTH ROUTES --------------------
-
-// Show login page (render views/login.ejs — tailwind styled)
+// -----------------------------------------------
+// LOGIN ROUTES
+// -----------------------------------------------
 app.get('/login', (req, res) => {
-  // if already logged in, go to home/read
-  if (req.session && req.session.user) return res.redirect('/read');
+  if (req.session.user) return res.redirect("/read");
   res.render('login', { error: null });
 });
 
-// Handle login post
 app.post('/login', (req, res) => {
   const { username, password } = req.body;
+
   if (username === LOCAL_USER.username && password === LOCAL_USER.password) {
     req.session.user = username;
-    console.log('DEBUG: user logged in, session set =', req.session);
+    console.log("Logged in:", req.session.user);
     return res.redirect('/read');
   }
-  res.render('login', { error: 'Invalid username or password' });
+
+  return res.render('login', { error: "Invalid username or password" });
 });
 
-// Protected home (optional)
-app.get('/home', ensureAuth, (req, res) => {
-  res.render('home', { user: req.session.user });
-});
-
-// Logout
 app.get('/logout', (req, res) => {
-  req.session.destroy(() => {
-    res.redirect('/login');
-  });
+  req.session.destroy(() => res.redirect('/login'));
 });
 
-// -------------------- Your existing routes (now protected) --------------------
+// -----------------------------------------------
+// STUDENT ROUTES (PROTECTED)
+// -----------------------------------------------
+app.get('/input', ensureAuth, (req, res) => res.render('input'));
 
-// Home form page (protected)
-app.get('/input', ensureAuth, (req, res) => {
-  res.render('input');
-});
-
-// ✅ Handle form submit & redirect to /read (protected)
 app.post('/students', ensureAuth, async (req, res) => {
   try {
     await userModel.create({
@@ -90,62 +92,47 @@ app.post('/students', ensureAuth, async (req, res) => {
       email: req.body.email,
       mobile: req.body.phone
     });
-    res.redirect('/read'); // redirect to All Students after create
+    res.redirect('/read');
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error creating student');
+    res.status(500).send("Error creating student");
   }
 });
 
-// ✅ Read all students (protected)
-// DEBUG /read route - paste into index.js (replace old /read)
-app.get('/read', async (req, res) => {
-  console.log('--- DEBUG: /read called ---');
-  console.log('session:', req.session); // helps check if login session exists
-
+app.get('/read', ensureAuth, async (req, res) => {
   try {
-    // try to get students
-    const students = await userModel.find().lean(); // lean() returns plain objects
-    console.log('DEBUG: students length =', Array.isArray(students) ? students.length : 'not-array');
-    return res.render('read', { students: students || [] });
+    const students = await userModel.find().lean();
+    res.render('read', { students });
   } catch (err) {
-    console.error('DEBUG: error in /read ->', err);
-    return res.status(500).send('Server error while loading students (check logs).');
+    console.error("READ ERROR:", err);
+    res.status(500).send("Error loading students");
   }
 });
 
-// ✅ Search student by roll number (protected)
 app.get('/students/search', ensureAuth, async (req, res) => {
   try {
-    const rollNo = req.query.rollNo;
-    const student = await userModel.findOne({ roll: rollNo });
-    if (!student) {
-      return res.render('read', { students: [] }); // No student found
-    }
-    res.render('read', { students: [student] }); // show single student
+    const student = await userModel.findOne({ roll: req.query.rollNo }).lean();
+    res.render('read', { students: student ? [student] : [] });
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error searching student');
+    res.status(500).send("Error searching student");
   }
 });
 
-// ✅ Delete student (protected)
 app.post('/students/:id/delete', ensureAuth, async (req, res) => {
   try {
     await userModel.findByIdAndDelete(req.params.id);
     res.redirect('/read');
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error deleting student');
+    res.status(500).send("Error deleting student");
   }
 });
 
-// Root - redirect to read or login
+// -----------------------------------------------
 app.get('/', (req, res) => {
-  if (req.session && req.session.user) return res.redirect('/read');
-  res.redirect('/login');
+  return req.session.user ? res.redirect('/read') : res.redirect('/login');
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
