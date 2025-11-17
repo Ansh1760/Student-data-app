@@ -99,13 +99,20 @@ app.post('/students', ensureAuth, async (req, res) => {
   }
 });
 
-app.get('/read', ensureAuth, async (req, res) => {
+// temporary debug /read route (paste into index.js replacing existing /read)
+app.get('/read', async (req, res) => {
+  console.log('--- DEBUG /read called ---');
+  console.log('session:', req.session ? req.session : '(no session)');
+
   try {
+    // try DB fetch
     const students = await userModel.find().lean();
-    res.render('read', { students });
+    console.log('DEBUG: students found =', Array.isArray(students) ? students.length : typeof students);
+    return res.render('read', { students: students || [] });
   } catch (err) {
-    console.error("READ ERROR:", err);
-    res.status(500).send("Error loading students");
+    console.error('DEBUG: error in /read ->', err && err.stack ? err.stack : err);
+    // friendly message in browser while debugging
+    return res.status(500).send('Server error while loading students — check server logs.');
   }
 });
 
