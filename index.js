@@ -56,7 +56,8 @@ app.post('/login', (req, res) => {
   const { username, password } = req.body;
   if (username === LOCAL_USER.username && password === LOCAL_USER.password) {
     req.session.user = username;
-    return res.redirect('/read'); // logged in -> students list
+    console.log('DEBUG: user logged in, session set =', req.session);
+    return res.redirect('/read');
   }
   res.render('login', { error: 'Invalid username or password' });
 });
@@ -97,13 +98,19 @@ app.post('/students', ensureAuth, async (req, res) => {
 });
 
 // ✅ Read all students (protected)
-app.get('/read', ensureAuth, async (req, res) => {
+// DEBUG /read route - paste into index.js (replace old /read)
+app.get('/read', async (req, res) => {
+  console.log('--- DEBUG: /read called ---');
+  console.log('session:', req.session); // helps check if login session exists
+
   try {
-    const students = await userModel.find();
-    res.render('read', { students });
+    // try to get students
+    const students = await userModel.find().lean(); // lean() returns plain objects
+    console.log('DEBUG: students length =', Array.isArray(students) ? students.length : 'not-array');
+    return res.render('read', { students: students || [] });
   } catch (err) {
-    console.error(err);
-    res.status(500).send('Error fetching students');
+    console.error('DEBUG: error in /read ->', err);
+    return res.status(500).send('Server error while loading students (check logs).');
   }
 });
 
