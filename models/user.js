@@ -1,5 +1,8 @@
 const mongoose = require('mongoose');
-mongoose.connect('mongodb://127.0.0.1:27017/studentsdata');
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/studentDB', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+});
 const userSchema = new mongoose.Schema({
     name: String,
     roll: Number,
